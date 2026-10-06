@@ -60,7 +60,6 @@ public class TerminalControl : FrameworkElement
     private HashSet<(int row, int col)>? _currentMatchSetCache;
     private static readonly HashSet<(int row, int col)> EmptyMatchSet = [];
     private readonly StringBuilder _inputLineBuffer = new();
-    private bool _suppressNextEnterToShell;
 
     // Rendering caches to avoid per-frame allocations
     private readonly Dictionary<Color, SolidColorBrush> _brushCache = [];
@@ -68,12 +67,10 @@ public class TerminalControl : FrameworkElement
     private Typeface? _typefaceItalic;
     private Typeface? _typefaceBoldItalic;
     private readonly StringBuilder _textRunBuffer = new();
-    private bool _suppressNextEnterTextInput;
 
     /// <summary>Fired when the pane wants focus.</summary>
     public event Action? FocusRequested;
     public event Action<string>? CommandSubmitted;
-    public event Func<string, bool>? CommandInterceptRequested;
     public event Action? ClearRequested;
     public event Action<SplitDirection>? SplitRequested;
     public event Action? ZoomRequested;
@@ -85,7 +82,6 @@ public class TerminalControl : FrameworkElement
     {
         FocusRequested = null;
         CommandSubmitted = null;
-        CommandInterceptRequested = null;
         ClearRequested = null;
         SplitRequested = null;
         ZoomRequested = null;
@@ -689,7 +685,7 @@ public class TerminalControl : FrameworkElement
 
                 case '\r':
                 case '\n':
-                    SubmitBufferedCommand(allowInterception: false);
+                    SubmitBufferedCommand();
                     break;
 
                 default:
@@ -705,51 +701,13 @@ public class TerminalControl : FrameworkElement
         }
     }
 
-    private void SubmitBufferedCommand(bool allowInterception)
+    private void SubmitBufferedCommand()
     {
-        var rawCommand = _inputLineBuffer.ToString();
-        var command = rawCommand.Trim();
+        var command = _inputLineBuffer.ToString().Trim();
         _inputLineBuffer.Clear();
 
-        if (string.IsNullOrWhiteSpace(command))
-            return;
-
-        if (allowInterception && TryInterceptCommand(command))
-        {
-            _suppressNextEnterToShell = true;
-            _suppressNextEnterTextInput = true;
-
-            // The command text has already been sent character-by-character to the shell.
-            // Cancel the current input line so a subsequent newline from agent output
-            // cannot execute the intercepted handler command.
-            if (_session != null)
-                _session.Write("\x03");
-            return;
-        }
-
-        CommandSubmitted?.Invoke(command);
-    }
-
-    private bool TryInterceptCommand(string command)
-    {
-        var handlers = CommandInterceptRequested;
-        if (handlers == null)
-            return false;
-
-        foreach (var callback in handlers.GetInvocationList().OfType<Func<string, bool>>())
-        {
-            try
-            {
-                if (callback(command))
-                    return true;
-            }
-            catch
-            {
-                // Ignore handler failures to avoid breaking terminal input.
-            }
-        }
-
-        return false;
+        if (!string.IsNullOrWhiteSpace(command))
+            CommandSubmitted?.Invoke(command);
     }
 
     private bool CopySelectionToClipboard()
@@ -838,15 +796,7 @@ public class TerminalControl : FrameworkElement
             if (e.Key == Key.Back)
                 TrackInputText("\b");
             else if (e.Key == Key.Enter)
-            {
-                SubmitBufferedCommand(allowInterception: true);
-                if (_suppressNextEnterToShell)
-                {
-                    _suppressNextEnterToShell = false;
-                    e.Handled = true;
-                    return;
-                }
-            }
+                SubmitBufferedCommand();
 
             EnsureLiveView();
             _session.Write(sequence);
@@ -857,15 +807,6 @@ public class TerminalControl : FrameworkElement
     protected override void OnTextInput(TextCompositionEventArgs e)
     {
         if (_session == null || string.IsNullOrEmpty(e.Text)) return;
-
-        // KeyDown handles Enter; suppress the trailing TextInput CR/LF when
-        // an intercepted command consumed the shell submission.
-        if (_suppressNextEnterTextInput && (e.Text.Contains('\r') || e.Text.Contains('\n')))
-        {
-            _suppressNextEnterTextInput = false;
-            e.Handled = true;
-            return;
-        }
 
         // Prevent duplicate newline writes from TextInput path.
         if (e.Text.Contains('\r') || e.Text.Contains('\n'))

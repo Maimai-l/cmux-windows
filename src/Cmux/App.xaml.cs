@@ -15,8 +15,6 @@ public partial class App : Application
     public static NamedPipeServer? PipeServer { get; private set; }
     public static SnippetService SnippetService { get; } = new();
     public static CommandLogService CommandLogService { get; } = new();
-    public static AgentConversationStoreService AgentConversationStore { get; } = new();
-    public static AgentRuntimeService AgentRuntime { get; } = new();
     public static DaemonClient DaemonClient { get; } = new();
     public static Task<bool> DaemonConnectTask { get; private set; } = Task.FromResult(false);
 
@@ -82,7 +80,6 @@ public partial class App : Application
     {
         _pipeServer?.Dispose();
         DaemonClient.Dispose();
-        AgentRuntime.Dispose();
         base.OnExit(e);
     }
 
